@@ -1,0 +1,208 @@
+<!DOCTYPE html
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ako ang bagyo</title>
+<style>
+:root{color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#0a0d18;--fg:#e9f0ff;--card:#141a2e;--accent:#e5483c}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:Georgia,"Times New Roman",serif}
+#setup{max-width:520px;margin:0 auto;padding:20px;display:flex;flex-direction:column;gap:14px;max-height:100%;overflow-y:auto}
+h1{font-size:1.4rem;margin:8px 0 0}
+p{margin:0;opacity:.7;font-size:.9rem}
+textarea,input[type=number]{width:100%;background:var(--card);color:var(--fg);border:1px solid #2a3350;border-radius:10px;padding:12px;font:16px Georgia,serif}
+textarea{height:clamp(120px,38vh,380px);resize:none}
+label{font-size:.85rem;opacity:.85;display:flex;flex-direction:column;gap:6px}
+label.row{flex-direction:row;align-items:center;gap:10px}
+button{background:var(--accent);color:#fff;border:0;border-radius:12px;padding:14px;font:600 1rem Georgia,serif}
+#stage{position:fixed;inset:0;display:none;background:var(--bg)}
+canvas{width:100%;height:100%;display:block}
+#bar{position:fixed;left:0;right:0;bottom:calc(14px + env(safe-area-inset-bottom,0px));display:none;justify-content:center;gap:10px}
+#bar button{padding:10px 18px;background:#ffffff33}
+</style>
+</head>
+<body>
+<div id="setup">
+  <h1>Ako ang bagyo 💔</h1>
+  <p>Paste your lyrics below. Lines like [Chorus] are skipped. Lines with “bagyo” or “yero” trigger the storm and flying roofs.</p>
+  <textarea id="lyrics" placeholder="Paste lyrics here…"></textarea>
+  <label>Seconds per line
+    <input id="spl" type="number" value="3.5" min="1" max="10" step="0.5" inputmode="decimal">
+  </label>
+  <label>Music (optional)
+    <input id="audio" type="file" accept="audio/*">
+  </label>
+  <label class="row"><input id="land" type="checkbox" checked> Landscape fullscreen (rotate your phone if it doesn’t lock)</label>
+  <button id="go">Start</button>
+</div>
+<div id="stage"><canvas id="cv"></canvas></div>
+<div id="bar"><button id="replay">Replay</button><button id="back">Edit</button></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const cv=$('cv'),ctx=cv.getContext('2d');
+const COLORS=['#E9F0FF','#F4A6A0','#F7D56B','#9FD8CB','#FF8E72'];
+const STORM=/bagyo|yero/i;
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+const back=x=>1+2.70158*Math.pow(x-1,3)+1.70158*Math.pow(x-1,2);
+let W,H,dpr,lines=[],spl=3.5,raf=0,t0=0,idx=-1,rain=[],hearts=[],clouds=[],cur=null,prev=null,audioEl=null;
+let storm=0,stormT=0,flash=0,bolt=null,roofs=[];
+
+function resize(){
+  dpr=Math.min(window.devicePixelRatio||1,2);
+  W=innerWidth;H=innerHeight;
+  cv.width=W*dpr;cv.height=H*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+addEventListener('resize',()=>{
+  if($('stage').style.display!=='block')return;
+  resize();scene();
+  if(cur&&idx>=0){cur=layout(lines[idx],cur.born);prev=null}
+});
+
+function scene(){
+  const n=Math.min(Math.round(W*H/5000),220);
+  rain=Array.from({length:n*2},()=>drop(Math.random()*H));rain.base=n;
+  hearts=Array.from({length:8},()=>({x:Math.random()*W,y:H*.3+Math.random()*H*.7,v:.4+Math.random()*.8,s:14+Math.random()*14,p:Math.random()*6}));
+  clouds=Array.from({length:6},()=>({x:Math.random()*W,y:-10+Math.random()*50,r:Math.max(W,H)*(.12+Math.random()*.14)}));
+}
+function drop(y){return{x:Math.random()*W,y,v:10+Math.random()*12,l:8+Math.random()*16}}
+
+function layout(text,born){
+  const maxW=W-60,words=text.split(/\s+/),out=[];
+  const base=clamp(Math.min(W/9,H/6),18,46);
+  let x=30,y=0;const lh=base*1.5;
+  for(const w of words){
+    let size=base*[.6,.75,1,1.25][Math.floor(Math.random()*4)],style=['italic','bold','normal'][Math.floor(Math.random()*3)],c=COLORS[Math.floor(Math.random()*COLORS.length)];
+    if(/bagyo/i.test(w)){size=base*1.9;style='bold';c='#ff5a4d'}
+    if(/yero/i.test(w)){size=base*1.6;style='bold';c='#b8c4d6'}
+    const font=`${style} ${size}px Georgia, serif`;
+    ctx.font=font;
+    const m=ctx.measureText(w+' ').width;
+    if(x+m>maxW+30&&x>30){x=30;y+=lh}
+    out.push({w,x,y,font,c,dy:(Math.random()-.5)*8,rot:(Math.random()-.5)*.8});
+    x+=m;
+  }
+  const total=y+lh;
+  const top=clamp(H*.2+Math.random()*H*.1,base*1.5,Math.max(base*1.5,H-total-60));
+  return{words:out,top,born:born||performance.now()};
+}
+
+function makeBolt(){
+  let x=W*(.15+Math.random()*.7),y=0;const pts=[[x,y]];
+  while(y<H*.65){y+=20+Math.random()*30;x+=(Math.random()-.5)*50;pts.push([x,y])}
+  return pts;
+}
+function spawnRoofs(now){
+  for(let i=0;i<3;i++)roofs.push({start:now+i*380,dur:2400+Math.random()*900,y0:H*(.25+Math.random()*.5),arc:(Math.random()<.5?-1:1)*(.15+Math.random()*.2),w:clamp(W*.18,70,150),a:Math.random()*6,spin:.05+Math.random()*.08});
+}
+function drawRoof(r,p){
+  const w=r.w,h=w*.42;
+  const x=-w+(W+2*w)*p,y=r.y0+Math.sin(p*Math.PI)*H*r.arc*-1+Math.sin(p*18)*8;
+  r.a+=r.spin;
+  ctx.save();ctx.translate(x,y);ctx.rotate(r.a);
+  ctx.fillStyle='#8a97a8';ctx.fillRect(-w/2,-h/2,w,h);
+  const n=8,sw=w/n;
+  for(let k=0;k<n;k++){ctx.fillStyle=k%2?'#6b7787':'#a3afbf';ctx.fillRect(-w/2+k*sw,-h/2,sw,h)}
+  ctx.strokeStyle='#d5deea';ctx.lineWidth=2;ctx.strokeRect(-w/2,-h/2,w,h);
+  ctx.restore();
+}
+
+function frame(now){
+  const t=(now-t0)/1000,i=Math.floor(t/spl);
+  if(i!==idx&&i<lines.length){
+    idx=i;prev=cur;cur=layout(lines[i]);
+    stormT=STORM.test(lines[i])?1:0;
+    if(stormT){flash=1;bolt=makeBolt()}
+    if(/yero/i.test(lines[i]))spawnRoofs(now);
+  }
+  if(i>=lines.length)stormT=0;
+  storm+=(stormT-storm)*.05;
+  if(storm>.5&&Math.random()<.012){flash=1;bolt=makeBolt()}
+
+  ctx.clearRect(0,0,W,H);
+  ctx.save();
+  if(storm>.05)ctx.translate((Math.random()-.5)*storm*5,(Math.random()-.5)*storm*5);
+  ctx.fillStyle=`rgba(0,0,12,${storm*.4})`;ctx.fillRect(-10,-10,W+20,H+20);
+
+  ctx.fillStyle=storm>.3?'#141f3a':'#1b2a4a';
+  for(const c of clouds){ctx.beginPath();ctx.ellipse(c.x,c.y,c.r,c.r*.4,0,0,7);ctx.fill();c.x+=.15+storm*1.2;if(c.x-c.r>W)c.x=-c.r}
+
+  const cnt=Math.round(rain.base*(1+storm)),wind=1+storm*7,sp=1+storm*1.3;
+  ctx.strokeStyle='rgba(201,214,240,.7)';ctx.lineWidth=1.2;ctx.beginPath();
+  for(let k=0;k<cnt&&k<rain.length;k++){const d=rain[k];
+    ctx.moveTo(d.x,d.y);ctx.lineTo(d.x-wind*3,d.y+d.l);
+    d.y+=d.v*sp;d.x-=wind;
+    if(d.y>H||d.x<-20){d.y=-d.l;d.x=Math.random()*(W+H*.4)}}
+  ctx.stroke();
+
+  for(const h of hearts){
+    h.y-=h.v;h.x+=storm*3;h.p+=.03;
+    if(h.y<-20){h.y=H+20;h.x=Math.random()*W}
+    if(h.x>W+20)h.x=-20;
+    ctx.font=`${h.s}px serif`;ctx.fillText('💔',h.x+Math.sin(h.p)*10,h.y);
+  }
+
+  roofs=roofs.filter(r=>{const p=(now-r.start)/r.dur;if(p>1)return false;if(p>=0)drawRoof(r,p);return true});
+
+  draw(prev,now,true,t);draw(cur,now,false,t);
+  ctx.restore();
+
+  if(flash>.02){
+    ctx.fillStyle=`rgba(255,255,255,${flash*.5})`;ctx.fillRect(0,0,W,H);
+    if(bolt){ctx.strokeStyle=`rgba(255,255,255,${flash})`;ctx.lineWidth=3;ctx.shadowColor='#bcd';ctx.shadowBlur=18;ctx.beginPath();bolt.forEach((p,k)=>k?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.stroke();ctx.shadowBlur=0}
+    flash*=.9;
+  }
+  if(t>=lines.length*spl+2){finish();return}
+  raf=requestAnimationFrame(frame);
+}
+
+function draw(L,now,out,t){
+  if(!L)return;
+  const age=(now-L.born)/1000;
+  ctx.textBaseline='alphabetic';
+  L.words.forEach((w,i)=>{
+    let a,sc=1,ox=0,oy=0,rot=0;
+    if(!out){const p=clamp((age-i*.12)/.5,0,1),e=back(p);a=p;sc=Math.max(e,0);oy=(1-e)*40;rot=(1-e)*w.rot}
+    else{a=1-clamp(age/.7,0,1);oy=-age*30;ox=age*(20+storm*160)}
+    if(a<=0)return;
+    const wob=Math.sin(t*2+i)*3,sh=storm>.05?(Math.random()-.5)*storm*6:0;
+    ctx.save();
+    ctx.globalAlpha=a;ctx.font=w.font;ctx.fillStyle=w.c;
+    ctx.shadowColor=/bagyo/i.test(w.w)&&storm>.3?'#ff5a4d':'rgba(0,0,0,.6)';
+    ctx.shadowBlur=/bagyo/i.test(w.w)?14:6;
+    ctx.translate(w.x+ox+sh,L.top+w.y+w.dy+oy+wob+sh);
+    ctx.rotate(rot);ctx.scale(sc,sc);
+    ctx.fillText(w.w,0,0);
+    ctx.restore();
+  });
+}
+
+async function start(){
+  lines=$('lyrics').value.split('\n').map(s=>s.trim()).filter(s=>s&&!/^\[.*\]$/.test(s));
+  if(!lines.length){$('lyrics').focus();return}
+  spl=Math.max(1,parseFloat($('spl').value)||3.5);
+  if($('land').checked){
+    try{await document.documentElement.requestFullscreen();await screen.orientation.lock('landscape')}catch(e){}
+  }
+  $('setup').style.display='none';$('stage').style.display='block';$('bar').style.display='none';
+  resize();scene();idx=-1;cur=prev=null;storm=stormT=flash=0;roofs=[];
+  const f=$('audio').files[0];
+  if(f){if(audioEl)audioEl.pause();audioEl=new Audio(URL.createObjectURL(f));audioEl.play().catch(()=>{})}
+  t0=performance.now();cancelAnimationFrame(raf);raf=requestAnimationFrame(frame);
+}
+function finish(){$('bar').style.display='flex';if(audioEl)audioEl.pause()}
+$('go').onclick=start;
+$('replay').onclick=start;
+$('back').onclick=()=>{
+  cancelAnimationFrame(raf);if(audioEl)audioEl.pause();
+  try{if(document.fullscreenElement)document.exitFullscreen();screen.orientation.unlock()}catch(e){}
+  $('stage').style.display='none';$('bar').style.display='none';$('setup').style.display='flex';
+};
+$('stage').addEventListener('click',()=>{if($('bar').style.display!=='flex')$('bar').style.display='flex'});
+</script>
+</body>
+</html>
+  
